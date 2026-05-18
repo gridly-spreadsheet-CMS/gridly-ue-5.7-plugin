@@ -137,11 +137,19 @@ public:
 	// Source changes download tracking
 	TWeakObjectPtr<ULocalizationTarget> CurrentSourceDownloadTarget;
 	FString CurrentSourceDownloadCulture;
+	// Pagination state for the source-changes download. Gridly's /views/{id}/records endpoint
+	// is paginated; we accumulate every page's records before processing.
+	TMap<FString, TArray<FGridlySourceRecord>> AccumulatedSourceNamespaceRecords;
+	int32 CurrentSourceDownloadOffset = 0;
+	int32 SourceDownloadLimit = 0;
+	int32 SourceDownloadTotalCount = 0;
 public:
 	void DownloadSourceChangesFromGridlyInternal(TWeakObjectPtr<ULocalizationTarget> LocalizationTarget, const FString& NativeCulture);
+	void RequestSourceChangesPage(int32 Offset);
 	void ProcessSourceChangesForNamespaces(const TMap<FString, TArray<FGridlySourceRecord>>& NamespaceRecords);
 	bool ImportCSVToStringTable(ULocalizationTarget* LocalizationTarget, const FString& Namespace, const FString& CSVFilePath);
 	void ParseCSVLine(const FString& Line, TArray<FString>& OutFields);
+	void ParseCSVRecords(const FString& Content, TArray<TArray<FString>>& OutRecords);
 	
 
 	

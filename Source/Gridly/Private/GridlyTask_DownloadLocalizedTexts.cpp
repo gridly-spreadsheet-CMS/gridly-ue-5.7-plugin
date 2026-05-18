@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2021 LocalizeDirect AB
+// Copyright (c) 2021 LocalizeDirect AB
 
 #include "GridlyTask_DownloadLocalizedTexts.h"
 
@@ -90,8 +90,12 @@ void UGridlyTask_DownloadLocalizedTexts::RequestPage(const int ViewIdIndex, cons
 
 		// Throttles number of requests by sleeping between each
 
-		UWorld* World = WorldContextObject != nullptr ? WorldContextObject->GetWorld() : nullptr;
-		if (World)
+		UWorld* World = nullptr;
+		if (IsValid(WorldContextObject))
+		{
+			World = WorldContextObject->GetWorld();
+		}
+		if (World && IsValid(World))
 		{
 			FTimerHandle TimerHandle;
 			World->GetTimerManager().SetTimer(TimerHandle, [this, ViewId, Offset]()
