@@ -48,6 +48,9 @@ public:
 	FDownloadLocalizedTextsProgressDelegate OnProgressDelegate;
 	FDownloadLocalizedTextsFailDelegate OnFailDelegate;;
 
+	/** Optional: localization target name used to resolve per-target Gridly connections. Empty = use global Import settings. */
+	FString TargetName;
+
 private:
 	FHttpRequestPtr HttpRequest;
 	const UObject* WorldContextObject;

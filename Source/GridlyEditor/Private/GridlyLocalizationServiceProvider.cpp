@@ -14,6 +14,7 @@
 #include "ILocalizationServiceModule.h"
 #include "LocalizationCommandletTasks.h"
 #include "LocalizationModule.h"
+#include "LocalizationSettings.h"
 #include "LocalizationTargetTypes.h"
 #include "Interfaces/IHttpResponse.h"
 #include "Interfaces/IMainFrameModule.h"
@@ -163,7 +164,36 @@ ELocalizationServiceOperationCommandResult::Type FGridlyLocalizationServiceProvi
 		StaticCastSharedRef<FDownloadLocalizationTargetFile>(InOperation);
 	const FString TargetCulture = DownloadOperation->GetInLocale();
 
+	// Resolve the per-target name from the operation's target GUID so the task can pick the
+	// correct Gridly connection from UGridlyGameSettings::TargetConnections.
+	const FGuid TargetGuid = DownloadOperation->GetInTargetGuid();
+	FString ResolvedTargetName;
+	auto FindTargetByGuid = [&TargetGuid](const ULocalizationTargetSet* TargetSet) -> ULocalizationTarget*
+	{
+		if (!TargetSet)
+		{
+			return nullptr;
+		}
+		for (ULocalizationTarget* T : TargetSet->TargetObjects)
+		{
+			if (T && T->Settings.Guid == TargetGuid)
+			{
+				return T;
+			}
+		}
+		return nullptr;
+	};
+	if (ULocalizationTarget* MatchingTarget = FindTargetByGuid(ULocalizationSettings::GetGameTargetSet()))
+	{
+		ResolvedTargetName = MatchingTarget->Settings.Name;
+	}
+	else if (ULocalizationTarget* MatchingTarget2 = FindTargetByGuid(ULocalizationSettings::GetEngineTargetSet()))
+	{
+		ResolvedTargetName = MatchingTarget2->Settings.Name;
+	}
+
 	UGridlyTask_DownloadLocalizedTexts* Task = UGridlyTask_DownloadLocalizedTexts::DownloadLocalizedTexts(nullptr);
+	Task->TargetName = ResolvedTargetName;
 
 	// On success
 	Task->OnSuccessDelegate.BindLambda(
@@ -420,15 +450,15 @@ void FGridlyLocalizationServiceProvider::OnImportCultureForTargetFromGridly(cons
 }
 
 TSharedRef<IHttpRequest, ESPMode::ThreadSafe> CreateExportRequest(const TArray<FPolyglotTextData>& PolyglotTextDatas,
-	const TSharedPtr<FLocTextHelper>& LocTextHelperPtr, bool bIncludeTargetTranslations)
+	const TSharedPtr<FLocTextHelper>& LocTextHelperPtr, bool bIncludeTargetTranslations,
+	const FGridlyConnection& Connection)
 {
 	FString JsonString;
 	FGridlyExporter::ConvertToJson(PolyglotTextDatas, bIncludeTargetTranslations, LocTextHelperPtr, JsonString);
 	UE_LOG(LogGridlyEditor, Log, TEXT("Creating export request with %d entries"), PolyglotTextDatas.Num());
 
-	const UGridlyGameSettings* GameSettings = GetMutableDefault<UGridlyGameSettings>();
-	const FString ApiKey = GameSettings->ExportApiKey;
-	const FString ViewId = GameSettings->ExportViewId;
+	const FString ApiKey = Connection.ExportApiKey;
+	const FString ViewId = Connection.ExportViewId;
 
 	FStringFormatNamedArguments Args;
 	Args.Add(TEXT("ViewId"), *ViewId);
@@ -649,6 +679,9 @@ void FGridlyLocalizationServiceProvider::ExportForTargetToGridly(ULocalizationTa
 	UERecords.Empty();
 	GridlyRecords.Empty();
 
+	const UGridlyGameSettings* GameSettings = GetMutableDefault<UGridlyGameSettings>();
+	LastExportTargetName = InLocalizationTarget ? InLocalizationTarget->Settings.Name : FString();
+	const FGridlyConnection Connection = GameSettings->ResolveConnectionForTarget(InLocalizationTarget);
 
 	if (FGridlyLocalizedText::GetAllTextAsPolyglotTextDatas(InLocalizationTarget, PolyglotTextDatas, LocTextHelperPtr))
 	{
@@ -656,10 +689,10 @@ void FGridlyLocalizationServiceProvider::ExportForTargetToGridly(ULocalizationTa
 
 		while (PolyglotTextDatas.Num() > 0)
 		{
-			const size_t ChunkSize = FMath::Min(GetMutableDefault<UGridlyGameSettings>()->ExportMaxRecordsPerRequest, PolyglotTextDatas.Num());
+			const size_t ChunkSize = FMath::Min(static_cast<int>(Connection.ExportMaxRecordsPerRequest), PolyglotTextDatas.Num());
 			const TArray<FPolyglotTextData> ChunkPolyglotTextDatas(PolyglotTextDatas.GetData(), ChunkSize);
 			PolyglotTextDatas.RemoveAt(0, ChunkSize);
-			const auto HttpRequest = CreateExportRequest(ChunkPolyglotTextDatas, LocTextHelperPtr, bIncTargetTranslation);
+			const auto HttpRequest = CreateExportRequest(ChunkPolyglotTextDatas, LocTextHelperPtr, bIncTargetTranslation, Connection);
 			HttpRequest->OnProcessRequestComplete() = ReqDelegate;
 			ExportFromTargetRequestQueue.Enqueue(HttpRequest);
 			for (int i = 0; i < ChunkPolyglotTextDatas.Num(); i++)
@@ -704,10 +737,11 @@ void FGridlyLocalizationServiceProvider::FetchGridlyCSV()
 {
 	// Set the flag to true at the beginning of the process
 	bHasDeletesPending = true;
-	
+
 	const UGridlyGameSettings* GameSettings = GetMutableDefault<UGridlyGameSettings>();
-	const FString ApiKey = GameSettings->ExportApiKey;
-	const FString ViewId = GameSettings->ExportViewId;
+	const FGridlyConnection Connection = GameSettings->ResolveConnectionForTarget(LastExportTargetName);
+	const FString ApiKey = Connection.ExportApiKey;
+	const FString ViewId = Connection.ExportViewId;
 	// URL for fetching the CSV from Gridly
 	FStringFormatNamedArguments Args;
 	Args.Add(TEXT("ViewId"), *ViewId);
@@ -1070,8 +1104,9 @@ void FGridlyLocalizationServiceProvider::DeleteRecordsFromGridly(const TArray<FS
 		UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("JSON Payload: %s"), *JsonPayload);
 
 		const UGridlyGameSettings* GameSettings = GetMutableDefault<UGridlyGameSettings>();
-		const FString ApiKey = GameSettings->ExportApiKey;
-		const FString ViewId = GameSettings->ExportViewId;
+		const FGridlyConnection Connection = GameSettings->ResolveConnectionForTarget(LastExportTargetName);
+		const FString ApiKey = Connection.ExportApiKey;
+		const FString ViewId = Connection.ExportViewId;
 
 		FStringFormatNamedArguments Args;
 		Args.Add(TEXT("ViewId"), *ViewId);
@@ -1207,7 +1242,8 @@ void FGridlyLocalizationServiceProvider::DownloadSourceChangesFromGridly(TWeakOb
 void FGridlyLocalizationServiceProvider::DownloadSourceChangesFromGridlyInternal(TWeakObjectPtr<ULocalizationTarget> LocalizationTarget, const FString& NativeCulture)
 {
 	const UGridlyGameSettings* GameSettings = GetMutableDefault<UGridlyGameSettings>();
-	const FString ApiKey = GameSettings->ImportApiKey;
+	const FGridlyConnection Connection = GameSettings->ResolveConnectionForTarget(LocalizationTarget.Get());
+	const FString ApiKey = Connection.ImportApiKey;
 
 	if (ApiKey.IsEmpty())
 	{
@@ -1216,7 +1252,7 @@ void FGridlyLocalizationServiceProvider::DownloadSourceChangesFromGridlyInternal
 		return;
 	}
 
-	if (GameSettings->ImportFromViewIds.Num() == 0 || GameSettings->ImportFromViewIds[0].IsEmpty())
+	if (Connection.ImportFromViewIds.Num() == 0 || Connection.ImportFromViewIds[0].IsEmpty())
 	{
 		UE_LOG(LogGridlyLocalizationServiceProvider, Error, TEXT("❌ No import view ID configured"));
 		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("❌ No import view ID configured.\n\nPlease configure the Gridly plugin settings:\n1. Go to Project Settings > Plugins > Gridly\n2. Add at least one Import View ID")));
@@ -1230,7 +1266,7 @@ void FGridlyLocalizationServiceProvider::DownloadSourceChangesFromGridlyInternal
 	AccumulatedSourceNamespaceRecords.Reset();
 	CurrentSourceDownloadOffset = 0;
 	SourceDownloadTotalCount = 0;
-	SourceDownloadLimit = FMath::Max(1, GameSettings->ImportMaxRecordsPerRequest);
+	SourceDownloadLimit = FMath::Max(1, Connection.ImportMaxRecordsPerRequest);
 
 	UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("🔄 Downloading source changes from Gridly for target: %s, culture: %s (page size %d)"),
 		*LocalizationTarget->Settings.Name, *NativeCulture, SourceDownloadLimit);
@@ -1241,8 +1277,9 @@ void FGridlyLocalizationServiceProvider::DownloadSourceChangesFromGridlyInternal
 void FGridlyLocalizationServiceProvider::RequestSourceChangesPage(int32 Offset)
 {
 	const UGridlyGameSettings* GameSettings = GetMutableDefault<UGridlyGameSettings>();
-	const FString ApiKey = GameSettings->ImportApiKey;
-	const FString ViewId = GameSettings->ImportFromViewIds[0];
+	const FGridlyConnection Connection = GameSettings->ResolveConnectionForTarget(CurrentSourceDownloadTarget.Get());
+	const FString ApiKey = Connection.ImportApiKey;
+	const FString ViewId = Connection.ImportFromViewIds.Num() > 0 ? Connection.ImportFromViewIds[0] : FString();
 
 	CurrentSourceDownloadOffset = Offset;
 

@@ -30,6 +30,7 @@ public class GridlyEditor : ModuleRules
 				"LocalizationCommandletExecution",
 				"MainFrame",
 				"DesktopPlatform",
+				"PropertyEditor",
 				"Gridly"
 			}
 		);

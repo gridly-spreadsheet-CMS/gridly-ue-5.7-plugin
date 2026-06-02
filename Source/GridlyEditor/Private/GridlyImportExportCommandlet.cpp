@@ -545,10 +545,11 @@ void UGridlyImportExportCommandlet::DownloadSourceChangesFromGridlyInternal(ULoc
 	UE_LOG(LogGridlyImportExportCommandlet, Display, TEXT("Target: %s, Culture: %s"), *LocalizationTarget->Settings.Name, *NativeCulture);
 	
 	const UGridlyGameSettings* GameSettings = GetMutableDefault<UGridlyGameSettings>();
-	const FString ApiKey = GameSettings->ImportApiKey;
+	const FGridlyConnection Connection = GameSettings->ResolveConnectionForTarget(LocalizationTarget);
+	const FString ApiKey = Connection.ImportApiKey;
 
 	UE_LOG(LogGridlyImportExportCommandlet, Display, TEXT("API Key configured: %s"), ApiKey.IsEmpty() ? TEXT("NO") : TEXT("YES"));
-	UE_LOG(LogGridlyImportExportCommandlet, Display, TEXT("Import View IDs count: %d"), GameSettings->ImportFromViewIds.Num());
+	UE_LOG(LogGridlyImportExportCommandlet, Display, TEXT("Import View IDs count: %d"), Connection.ImportFromViewIds.Num());
 
 	if (ApiKey.IsEmpty())
 	{
@@ -557,13 +558,13 @@ void UGridlyImportExportCommandlet::DownloadSourceChangesFromGridlyInternal(ULoc
 	}
 
 	// Get the first view ID for import
-	if (GameSettings->ImportFromViewIds.Num() == 0 || GameSettings->ImportFromViewIds[0].IsEmpty())
+	if (Connection.ImportFromViewIds.Num() == 0 || Connection.ImportFromViewIds[0].IsEmpty())
 	{
 		UE_LOG(LogGridlyImportExportCommandlet, Error, TEXT("No import view ID configured"));
 		return;
 	}
 
-	const FString ViewId = GameSettings->ImportFromViewIds[0];
+	const FString ViewId = Connection.ImportFromViewIds[0];
 	const FString Url = FString::Printf(TEXT("https://api.gridly.com/v1/views/%s/records"), *ViewId);
 
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();

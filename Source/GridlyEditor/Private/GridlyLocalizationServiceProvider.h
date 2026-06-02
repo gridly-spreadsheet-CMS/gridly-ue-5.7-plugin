@@ -90,6 +90,9 @@ public:
 
 	void ExportForTargetToGridly(ULocalizationTarget* LocalizationTarget, FHttpRequestCompleteDelegate& ReqDelegate, const FText& SlowTaskText, bool bIncTargetTranslation = false);
 
+	/** Name of the localization target driving the in-flight export. Used by FetchGridlyCSV/DeleteRecordsFromGridly to resolve the right connection. */
+	FString LastExportTargetName;
+
 	// New functions for fetching and parsing CSV from Gridly
 	void FetchGridlyCSV(); // Fetches the CSV data from Gridly
 	void OnGridlyCSVResponseReceived(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful); // Callback for when the CSV is received

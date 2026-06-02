@@ -25,18 +25,22 @@ UGridlyTask_DownloadLocalizedTexts::UGridlyTask_DownloadLocalizedTexts()
 void UGridlyTask_DownloadLocalizedTexts::Activate()
 {
 	const UGridlyGameSettings* GameSettings = GetMutableDefault<UGridlyGameSettings>();
+	const FGridlyConnection Connection = GameSettings->ResolveConnectionForTarget(TargetName);
 
-	Limit = GameSettings->ImportMaxRecordsPerRequest;
+	Limit = Connection.ImportMaxRecordsPerRequest;
 	TotalCount = 0;
 
 	ViewIds.Reset();
-	for (int i = 0; i < GameSettings->ImportFromViewIds.Num(); i++)
+	for (const FString& ViewId : Connection.ImportFromViewIds)
 	{
-		if (!GameSettings->ImportFromViewIds[i].IsEmpty())
+		if (!ViewId.IsEmpty())
 		{
-			ViewIds.Add(GameSettings->ImportFromViewIds[i]);
+			ViewIds.Add(ViewId);
 		}
 	}
+
+	UE_LOG(LogGridly, Log, TEXT("DownloadLocalizedTexts activating for target '%s' with %d view ID(s)"),
+		TargetName.IsEmpty() ? TEXT("<global>") : *TargetName, ViewIds.Num());
 
 	PolyglotTextDatas.Reset();
 
@@ -63,7 +67,8 @@ void UGridlyTask_DownloadLocalizedTexts::RequestPage(const int ViewIdIndex, cons
 		const FString& ViewId = ViewIds[ViewIdIndex];
 
 		const UGridlyGameSettings* GameSettings = GetMutableDefault<UGridlyGameSettings>();
-		const FString ApiKey = GameSettings->ImportApiKey;
+		const FGridlyConnection Connection = GameSettings->ResolveConnectionForTarget(TargetName);
+		const FString ApiKey = Connection.ImportApiKey;
 
 		const FString PaginationSettings =
 			FGenericPlatformHttp::UrlEncode(FString::Printf(TEXT("{\"offset\":%d,\"limit\":%d}"), Offset, Limit));

@@ -1,4 +1,4 @@
-# Gridly for UE5.7
+# Gridly for UE5.6
 
 Gridly is the #1 spreadsheet for multi-language content. Bring your digital assets together and localize at speed!
 
@@ -6,7 +6,7 @@ Manage your game’s data as a single source of truth and roll out continuous up
 
 ## Prerequisites
 
-- Unreal Engine 5.7
+- Unreal Engine 5.6
 
 ## Getting Started
 
@@ -14,13 +14,13 @@ Before you use Gridly, you will need to sign up for an account at https://www.gr
 
 Download the Gridly plugin itself, as well as the sample project to get you started:
 
-- [Gridly UE 5.7 Plugin](https://github.com/gridly-spreadsheet-CMS/gridly-ue-5.7-plugin)
+- [Gridly UE 5.6 Plugin](https://github.com/gridly-spreadsheet-CMS/gridly-ue-5.6-plugin)
 
-The sample project is optional, but provides a working example project for reference that has a very basic user interface set up for localization in UE5.7.
+The sample project is optional, but provides a working example project for reference that has a very basic user interface set up for localization in UE5.6.
 
 ### Setting up a Project for Localization
 
-Gridly plugin for UE5.7 leverages Unreal's built-in tools for localization. If you are not familiar with Unreal's localization pipeline, please consult [their documentation](https://docs.unrealengine.com/en-US/ProductionPipelines/Localization/Overview/index.html).
+Gridly plugin for UE5.6 leverages Unreal's built-in tools for localization. If you are not familiar with Unreal's localization pipeline, please consult [their documentation](https://docs.unrealengine.com/en-US/ProductionPipelines/Localization/Overview/index.html).
 
 This guide assumes that you are already familiar with Unreal's tools, and that you've correctly set up all the text in your project for localization using this workflow. The plugin supports both inline source strings and the use of StringTables.
 
@@ -30,19 +30,19 @@ The plugin can be installed as either an engine plugin or a project plugin.
 
 #### As a Project Plugin
 
-- Extract the contents of Gridly UE5.7 Plugin repository to `Plugins/Gridly` (relative to project root).
+- Extract the contents of Gridly UE5.6 Plugin repository to `Plugins/Gridly` (relative to project root).
 - Generate project files for the project and build the project to compile the required DLLs for the project plugin.
 
 #### As an Engine Plugin
 
-- Extract the contents of Gridly UE5.7 Plugin repository to `Engine/Plugins/Gridly` (relative to engine root).
+- Extract the contents of Gridly UE5.6 Plugin repository to `Engine/Plugins/Gridly` (relative to engine root).
 - Generate project files for the engine and build again to compile the required DLLs for the plugin.
 
 ### Enabling the Plugin
 
 To enable the plugin in your project, go to `Edit -> Plugins` and search for `Gridly`.
 
-![Enable Gridly UE5.7 Plugin](Documentation/EnablePlugin.png)
+![Enable Gridly UE5.6 Plugin](Documentation/EnablePlugin.png)
 
 Once enabled, restart Unreal to load the plugin.
 
@@ -113,7 +113,7 @@ The **Download Source Changes** feature also supports creating new string tables
 
 ### Exporting Translations
 
-If you have existing translations in UE5.7, these can also be exported to Gridly with a single click (you usually only need to do this once).
+If you have existing translations in UE5.6, these can also be exported to Gridly with a single click (you usually only need to do this once).
 
 ![Export all to Gridly](Documentation/ExportTranslations.png)
 
@@ -131,7 +131,7 @@ While possible, it is currently *not* recommended to use this mode in a producti
 
 ## Gridly Data Table
 
-The Gridly Data Table is a data table that can be used like a regular data table in UE5.7 as part of your game's logic. The extra functionality that this plugin provides is that the data can also be edited through the Gridly web app, and synchronized with UE5.7 both during development and even in the packaged project. To get started, right click in the asset browser to create a Gridly Data Table:
+The Gridly Data Table is a data table that can be used like a regular data table in UE5.6 as part of your game's logic. The extra functionality that this plugin provides is that the data can also be edited through the Gridly web app, and synchronized with UE5.6 both during development and even in the packaged project. To get started, right click in the asset browser to create a Gridly Data Table:
 
 ![Create Gridly Data Table](Documentation/CreateGridlyDataTable.png)
 
@@ -139,7 +139,7 @@ You need to select a Structure data type for each row (or a `USTRUCT` that inher
 
 ![Set Gridly Data Table View ID](Documentation/SetGridlyDataTableViewId.png)
 
-For the plugin to map the data correctly between Gridly and UE5.7, the variable names of the Structure needs to be named the exact same as the column IDs of the view you are synchronizing with. Create an empty grid on Gridly and create columns with column IDs that match your Structure variables.
+For the plugin to map the data correctly between Gridly and UE5.6, the variable names of the Structure needs to be named the exact same as the column IDs of the view you are synchronizing with. Create an empty grid on Gridly and create columns with column IDs that match your Structure variables.
 
 ![Create Gridly Data Grid](Documentation/CreateGridlyDataGrid.png)
 
@@ -147,7 +147,7 @@ For the plugin to map the data correctly between Gridly and UE5.7, the variable 
 
 Currently, the Gridly Data Table supports synchronizing *Boolean*, *Integer*, *Float*, *String* and *Enum* types. 
 
-You can now import/export data from UE5.7 to Gridly:
+You can now import/export data from UE5.6 to Gridly:
 
 ![Import/export Gridly Data Table](Documentation/ImportExportGridlyDataTable.png)
 
@@ -164,6 +164,23 @@ All the settings for Gridly can be found in `Edit -> Project Settings -> Plugins
 
 - *Export Api Key*: This is the API key used for exporting source strings. Make sure it has write-permissions.
 - *Export View Id*: This is the view ID on Gridly that source strings should be exported to.
+
+### Per-Target Gridly Connections
+
+If your project has more than one localization target and each target should sync with a different Gridly view (or even a different Gridly account), you can map each target to its own connection instead of sharing one set of global keys.
+
+The settings live in the **`Gridly | Connection Mode`** category in `Edit -> Project Settings -> Plugins -> Gridly`:
+
+- *Use Per Target Connections*: A switch that controls which connection the plugin reads.
+  - **Off** (default): every target uses the global *Import Api Key* / *Import from View Ids* / *Export Api Key* / *Export View Id* fields described above. This is the original behaviour — existing projects need no changes.
+  - **On**: each localization target reads its own entry from *Target Connections* (described below). Targets that have no entry fall back to the global fields, so you can opt-in target by target.
+- *Target Connections*: A map keyed by the localization target name (the same name shown in the Localization Dashboard). Each entry contains its own *Import Api Key*, *Import from View Ids*, *Import Max Records Per Request*, *Export Api Key*, *Export View Id*, and *Export Max Records Per Request*.
+- *Available Target Names*: A read-only list of localization target names discovered in your project. Use these as the keys when adding entries to *Target Connections*.
+- *Refresh Localization Target Names*: A button that re-scans the project's localization targets (both the game target set and the engine target set) and refreshes *Available Target Names*. Press this after you create, rename, or remove a localization target so the dropdown reflects the current state.
+
+Keys are matched case-sensitively against `ULocalizationTarget::Settings.Name`, so use the names from *Available Target Names* verbatim. The same per-target connection is used for *Export to Gridly*, *Export All*, *Import from Gridly*, and *Download Source Changes* on that target.
+
+When per-target mode is enabled, the global Import/Export fields are disabled in the UI but still readable; they continue to act as the fallback for any target that does not have an explicit entry and for runtime Blueprint nodes like *Download Localized Texts*.
 
 ### Column Mapping Options
 

@@ -3,10 +3,13 @@
 #include "GridlyEditor.h"
 
 #include "GridlyCommands.h"
+#include "GridlyGameSettings.h"
+#include "GridlyGameSettingsDetailsCustomization.h"
 #include "GridlyLocalizationServiceProvider.h"
 #include "GridlyStyle.h"
 #include "IAssetTools.h"
 #include "Json.h"
+#include "PropertyEditorModule.h"
 #include "ToolMenus.h"
 #include "Runtime/Online/HTTP/Public/HttpModule.h"
 #include "AssetTypeActions_GridlyDataTable.h"
@@ -54,6 +57,13 @@ void FGridlyEditorModule::StartupModule()
 		ILocalizationServiceModule& LocServiceModule = FModuleManager::LoadModuleChecked<ILocalizationServiceModule>("LocalizationService");
 		LocServiceModule.SetProvider(TEXT("Gridly"));
 	}
+
+	// Register details customization so the Gridly settings panel can refresh the available
+	// localization target names on demand.
+	FPropertyEditorModule& PropertyEditorModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
+	PropertyEditorModule.RegisterCustomClassLayout(
+		UGridlyGameSettings::StaticClass()->GetFName(),
+		FOnGetDetailCustomizationInstance::CreateStatic(&FGridlyGameSettingsDetailsCustomization::MakeInstance));
 }
 
 
@@ -66,6 +76,11 @@ void FGridlyEditorModule::ShutdownModule()
 	FGridlyCommands::Unregister();
 
 	IModularFeatures::Get().UnregisterModularFeature("LocalizationService", &GridlyLocalizationServiceProvider);
+
+	if (FPropertyEditorModule* PropertyEditorModule = FModuleManager::GetModulePtr<FPropertyEditorModule>("PropertyEditor"))
+	{
+		PropertyEditorModule->UnregisterCustomClassLayout(UGridlyGameSettings::StaticClass()->GetFName());
+	}
 }
 
 void FGridlyEditorModule::RegisterMenus()

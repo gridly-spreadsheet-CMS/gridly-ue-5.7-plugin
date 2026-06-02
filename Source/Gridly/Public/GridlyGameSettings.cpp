@@ -6,6 +6,10 @@
 #include "Serialization/JsonSerializer.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
+#if WITH_EDITOR
+#include "LocalizationSettings.h"
+#include "LocalizationTargetTypes.h"
+#endif
 
 
 UGridlyGameSettings::UGridlyGameSettings(const FObjectInitializer& ObjectInitializer)
@@ -237,6 +241,66 @@ UGridlyGameSettings::UGridlyGameSettings(const FObjectInitializer& ObjectInitial
     DeserializeJsonToArray(ImportFromViewIdsJson, ImportFromViewIds);
     bUseCombinedNamespaceId = false;
 
+    RefreshAvailableTargetNames();
+
+#endif
+}
+
+FGridlyConnection UGridlyGameSettings::ResolveConnectionForTarget(const FString& TargetName) const
+{
+    if (bUsePerTargetConnections)
+    {
+        if (const FGridlyConnection* Found = TargetConnections.Find(TargetName))
+        {
+            return *Found;
+        }
+    }
+
+    FGridlyConnection Fallback;
+    Fallback.ImportApiKey = ImportApiKey;
+    Fallback.ImportFromViewIds = ImportFromViewIds;
+    Fallback.ImportMaxRecordsPerRequest = ImportMaxRecordsPerRequest;
+    Fallback.ExportApiKey = ExportApiKey;
+    Fallback.ExportViewId = ExportViewId;
+    Fallback.ExportMaxRecordsPerRequest = ExportMaxRecordsPerRequest;
+    return Fallback;
+}
+
+FGridlyConnection UGridlyGameSettings::ResolveConnectionForTarget(const ULocalizationTarget* Target) const
+{
+#if WITH_EDITOR
+    if (Target)
+    {
+        return ResolveConnectionForTarget(Target->Settings.Name);
+    }
+#endif
+    return ResolveConnectionForTarget(FString());
+}
+
+void UGridlyGameSettings::RefreshAvailableTargetNames()
+{
+#if WITH_EDITOR
+    AvailableTargetNames.Reset();
+    if (const ULocalizationTargetSet* GameTargetSet = ULocalizationSettings::GetGameTargetSet())
+    {
+        for (const ULocalizationTarget* Target : GameTargetSet->TargetObjects)
+        {
+            if (Target)
+            {
+                AvailableTargetNames.AddUnique(Target->Settings.Name);
+            }
+        }
+    }
+    if (const ULocalizationTargetSet* EngineTargetSet = ULocalizationSettings::GetEngineTargetSet())
+    {
+        for (const ULocalizationTarget* Target : EngineTargetSet->TargetObjects)
+        {
+            if (Target)
+            {
+                AvailableTargetNames.AddUnique(Target->Settings.Name);
+            }
+        }
+    }
 #endif
 }
 
