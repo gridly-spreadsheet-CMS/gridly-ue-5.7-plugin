@@ -1248,14 +1248,22 @@ void FGridlyLocalizationServiceProvider::DownloadSourceChangesFromGridlyInternal
 	if (ApiKey.IsEmpty())
 	{
 		UE_LOG(LogGridlyLocalizationServiceProvider, Error, TEXT("❌ No import API key configured"));
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("❌ No import API key configured.\n\nPlease configure the Gridly plugin settings:\n1. Go to Project Settings > Plugins > Gridly\n2. Set the Import API Key\n3. Add at least one Import View ID")));
+		if (!IsRunningCommandlet())
+		{
+			FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("❌ No import API key configured.\n\nPlease configure the Gridly plugin settings:\n1. Go to Project Settings > Plugins > Gridly\n2. Set the Import API Key\n3. Add at least one Import View ID")));
+		}
+		bSourceChangesDownloadInProgress = false;
 		return;
 	}
 
 	if (Connection.ImportFromViewIds.Num() == 0 || Connection.ImportFromViewIds[0].IsEmpty())
 	{
 		UE_LOG(LogGridlyLocalizationServiceProvider, Error, TEXT("❌ No import view ID configured"));
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("❌ No import view ID configured.\n\nPlease configure the Gridly plugin settings:\n1. Go to Project Settings > Plugins > Gridly\n2. Add at least one Import View ID")));
+		if (!IsRunningCommandlet())
+		{
+			FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("❌ No import view ID configured.\n\nPlease configure the Gridly plugin settings:\n1. Go to Project Settings > Plugins > Gridly\n2. Add at least one Import View ID")));
+		}
+		bSourceChangesDownloadInProgress = false;
 		return;
 	}
 
@@ -1267,6 +1275,7 @@ void FGridlyLocalizationServiceProvider::DownloadSourceChangesFromGridlyInternal
 	CurrentSourceDownloadOffset = 0;
 	SourceDownloadTotalCount = 0;
 	SourceDownloadLimit = FMath::Max(1, Connection.ImportMaxRecordsPerRequest);
+	bSourceChangesDownloadInProgress = true;
 
 	UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("🔄 Downloading source changes from Gridly for target: %s, culture: %s (page size %d)"),
 		*LocalizationTarget->Settings.Name, *NativeCulture, SourceDownloadLimit);
@@ -1307,7 +1316,11 @@ void FGridlyLocalizationServiceProvider::OnDownloadSourceChangesFromGridly(FHttp
 	if (!bSuccess || !Response.IsValid())
 	{
 		UE_LOG(LogGridlyLocalizationServiceProvider, Error, TEXT("❌ Failed to download source changes from Gridly"));
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("❌ Failed to download source changes from Gridly. Please check your API key and view ID.")));
+		if (!IsRunningCommandlet())
+		{
+			FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("❌ Failed to download source changes from Gridly. Please check your API key and view ID.")));
+		}
+		bSourceChangesDownloadInProgress = false;
 		return;
 	}
 
@@ -1328,7 +1341,11 @@ void FGridlyLocalizationServiceProvider::OnDownloadSourceChangesFromGridly(FHttp
 	if (!FJsonSerializer::Deserialize(JsonReader, RecordsArray))
 	{
 		UE_LOG(LogGridlyLocalizationServiceProvider, Error, TEXT("❌ Failed to parse JSON response from Gridly"));
-		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("❌ Failed to parse response from Gridly.")));
+		if (!IsRunningCommandlet())
+		{
+			FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(TEXT("❌ Failed to parse response from Gridly.")));
+		}
+		bSourceChangesDownloadInProgress = false;
 		return;
 	}
 
@@ -1454,6 +1471,7 @@ void FGridlyLocalizationServiceProvider::ProcessSourceChangesForNamespaces(const
 	if (!CurrentSourceDownloadTarget.IsValid())
 	{
 		UE_LOG(LogGridlyLocalizationServiceProvider, Error, TEXT("Invalid localization target for source changes processing"));
+		bSourceChangesDownloadInProgress = false;
 		return;
 	}
 
@@ -1532,7 +1550,11 @@ void FGridlyLocalizationServiceProvider::ProcessSourceChangesForNamespaces(const
 	}
 
 	UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("%s"), *Message);
-	FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
+	if (!IsRunningCommandlet())
+	{
+		FMessageDialog::Open(EAppMsgType::Ok, FText::FromString(Message));
+	}
+	bSourceChangesDownloadInProgress = false;
 }
 
 bool FGridlyLocalizationServiceProvider::ImportCSVToStringTable(ULocalizationTarget* LocalizationTarget, const FString& Namespace, const FString& CSVFilePath)

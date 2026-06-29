@@ -14,14 +14,6 @@
 
 // Forward declarations
 class ULocalizationTarget;
-class UStringTable;
-
-// Structure to hold Gridly source record data
-struct FGridlySourceRecord
-{
-	FString RecordId;
-	FString SourceText;
-};
 
 /**
  *	GridlyImportExportCommandlet: Commandlet to Export Native Texts to Gridy and Import translations from Gridly.
@@ -44,19 +36,6 @@ private:
 	TArray<FString> CulturesToDownload;
 	TArray<FString> DownloadedFiles;
 
-	// Download Source Changes functionality
-	TWeakObjectPtr<ULocalizationTarget> CurrentSourceDownloadTarget;
-	FString CurrentSourceDownloadCulture;
-
-private:
 	void OnDownloadComplete(const FLocalizationServiceOperationRef& Operation, ELocalizationServiceOperationCommandResult::Type Result, bool bIsTargetSet);
 	void BlockingRunLocCommandletTask(const TArray<LocalizationCommandletExecution::FTask>& LocTasks);
-	
-	// Download Source Changes methods
-	void DownloadSourceChangesFromGridlyInternal(ULocalizationTarget* LocalizationTarget, const FString& NativeCulture);
-	void OnDownloadSourceChangesFromGridly(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSuccess);
-	void ProcessSourceChangesForNamespaces(const TMap<FString, TArray<FGridlySourceRecord>>& NamespaceRecords);
-	bool ImportCSVToStringTable(ULocalizationTarget* LocalizationTarget, const FString& Namespace, const FString& CSVFilePath);
-	void ParseCSVLine(const FString& Line, TArray<FString>& OutFields);
-	bool UpdateStringTableEntry(ULocalizationTarget* LocalizationTarget, const FString& Namespace, const FString& Key, const FString& SourceString);
 };

@@ -146,7 +146,11 @@ public:
 	int32 CurrentSourceDownloadOffset = 0;
 	int32 SourceDownloadLimit = 0;
 	int32 SourceDownloadTotalCount = 0;
+	// True while a source-changes download (pagination + post-processing) is in flight.
+	// The commandlet path polls this so it can wait for the async provider flow to complete.
+	bool bSourceChangesDownloadInProgress = false;
 public:
+	bool IsSourceChangesDownloadInProgress() const { return bSourceChangesDownloadInProgress; }
 	void DownloadSourceChangesFromGridlyInternal(TWeakObjectPtr<ULocalizationTarget> LocalizationTarget, const FString& NativeCulture);
 	void RequestSourceChangesPage(int32 Offset);
 	void ProcessSourceChangesForNamespaces(const TMap<FString, TArray<FGridlySourceRecord>>& NamespaceRecords);
