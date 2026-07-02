@@ -153,13 +153,26 @@ public:
 	bool IsSourceChangesDownloadInProgress() const { return bSourceChangesDownloadInProgress; }
 	void DownloadSourceChangesFromGridlyInternal(TWeakObjectPtr<ULocalizationTarget> LocalizationTarget, const FString& NativeCulture);
 	void RequestSourceChangesPage(int32 Offset);
-	void ProcessSourceChangesForNamespaces(const TMap<FString, TArray<FGridlySourceRecord>>& NamespaceRecords);
+	void ProcessSourceChangesForNamespaces(const TMap<FString, TArray<FGridlySourceRecord>>& NamespaceRecords, bool bDownloadCompletedFully);
 	bool ImportCSVToStringTable(ULocalizationTarget* LocalizationTarget, const FString& Namespace, const FString& CSVFilePath);
 	void ParseCSVLine(const FString& Line, TArray<FString>& OutFields);
 	void ParseCSVRecords(const FString& Content, TArray<TArray<FString>>& OutRecords);
-	
 
-	
+	// Deletion pass: removes entries from UE string tables that no longer exist in Gridly.
+	// Only namespaces present in NamespaceRecords AND listed in SucceededNamespaces are pruned,
+	// so partially imported namespaces are left untouched. OutBackupDir receives the absolute
+	// path to the per-run backup folder (empty if backups were not configured).
+	void DeleteMissingRecordsFromStringTables(
+		const TMap<FString, TArray<FGridlySourceRecord>>& NamespaceRecords,
+		const TSet<FString>& SucceededNamespaces,
+		int32& OutDeletedEntries,
+		int32& OutAffectedTables,
+		FString& OutBackupDir);
+
+	// Copies the on-disk .uasset for the given string table into BackupRootDir, preserving its
+	// package sub-path. Returns true if a file was copied (or the source didn't exist yet).
+	bool BackupStringTablePackage(const UStringTable* StringTable, const FString& BackupRootDir) const;
+
 	// String table helper functions
 	UStringTable* FindOrCreateStringTable(const FString& Namespace);
 	

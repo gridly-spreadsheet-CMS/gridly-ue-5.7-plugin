@@ -111,6 +111,26 @@ The **Download Source Changes** feature also supports creating new string tables
 - Result: Creates a string table named `B_table` with the specified entries
  **Note**: The string table name in UE5 will match exactly with your Gridly path name (no "StringTable_" prefix is added).
 
+### Deleting Missing Records on Download
+
+The **Download Source Changes** flow can optionally mirror deletions from Gridly back to your UE string tables. When enabled, any record that exists in a UE `UStringTable` but is no longer present in Gridly is removed after the download completes.
+
+Key safety properties:
+
+- **Deletion runs only when the full download succeeds.** If any page of the paginated fetch fails or returns short, the deletion pass is skipped entirely — a partial dataset will never cause data loss.
+- **Only namespaces that imported successfully are pruned.** A per-namespace import failure leaves that namespace's existing entries untouched.
+- **Backup before modify.** Before removing any entries, each affected `.uasset` is copied to a timestamped subfolder under your configured backup path (`GridlyDownloadBackup_YYYY-MM-DD_HHmmss/…`, preserving the package path). If the backup can't be written, the table is skipped.
+- **String table assets are never deleted.** Only individual entries inside existing tables are removed; a `UStringTable` asset is preserved even if Gridly no longer has any records for it.
+- Works from both the Localization Dashboard button and `DOWNLOADSOURCEFROMGRIDLY.bat` — the commandlet uses the same code path, so no batch-file changes are required.
+
+The settings live in the **`Gridly | Options`** category in `Edit -> Project Settings -> Plugins -> Gridly`:
+
+- *Delete Missing Records On Download* (default: **off**): Master switch. Off means the download only adds/updates entries — original behaviour.
+- *String Table Backup Path*: Where affected `.uasset` files are copied before entries are removed. Accepts either an absolute filesystem path (e.g. `D:/GridlyBackups`) or a UE mount-point path (e.g. `/Game/Backup`, which resolves to `<Project>/Content/Backup`). Leaving this empty runs the deletion without a backup and logs a warning — not recommended. Placing backups inside `/Content` also emits a warning because the AssetRegistry may pick up the copied files as duplicate assets; prefer a path outside the project.
+- *Only Delete Entries When String Table Exists* (default: **on**): Safety toggle documenting that the plugin only ever removes entries, never whole `UStringTable` assets. Keep this on.
+
+On completion, the confirmation dialog and Output Log both report how many stale entries were removed, across how many tables, and the absolute path of the backup folder that was written.
+
 ### Exporting Translations
 
 If you have existing translations in UE5.6, these can also be exported to Gridly with a single click (you usually only need to do this once).

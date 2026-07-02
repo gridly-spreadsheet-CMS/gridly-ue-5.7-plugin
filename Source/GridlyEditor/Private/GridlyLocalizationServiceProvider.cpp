@@ -1458,15 +1458,28 @@ void FGridlyLocalizationServiceProvider::OnDownloadSourceChangesFromGridly(FHttp
 		return;
 	}
 
-	UE_LOG(LogGridlyLocalizationServiceProvider, Log,
-		TEXT("✅ Finished downloading source changes. Total records received: %d, distinct namespaces: %d"),
-		NextOffset, NamespaceRecords.Num());
+	// If Gridly reported more records than we managed to fetch (bMoreByCount && !bHasProgress),
+	// this is a partial dataset — do NOT let the deletion pass run against it, or we'd wipe
+	// entries that are still present in Gridly but happened to land on a page we never got.
+	const bool bDownloadCompletedFully = !bMoreByCount;
+	if (!bDownloadCompletedFully)
+	{
+		UE_LOG(LogGridlyLocalizationServiceProvider, Warning,
+			TEXT("⚠️ Source-changes download stopped early: fetched %d/%d records. Deletion pass will be skipped."),
+			NextOffset, SourceDownloadTotalCount);
+	}
+	else
+	{
+		UE_LOG(LogGridlyLocalizationServiceProvider, Log,
+			TEXT("✅ Finished downloading source changes. Total records received: %d, distinct namespaces: %d"),
+			NextOffset, NamespaceRecords.Num());
+	}
 
-	ProcessSourceChangesForNamespaces(NamespaceRecords);
+	ProcessSourceChangesForNamespaces(NamespaceRecords, bDownloadCompletedFully);
 	AccumulatedSourceNamespaceRecords.Reset();
 }
 
-void FGridlyLocalizationServiceProvider::ProcessSourceChangesForNamespaces(const TMap<FString, TArray<FGridlySourceRecord>>& NamespaceRecords)
+void FGridlyLocalizationServiceProvider::ProcessSourceChangesForNamespaces(const TMap<FString, TArray<FGridlySourceRecord>>& NamespaceRecords, bool bDownloadCompletedFully)
 {
 	if (!CurrentSourceDownloadTarget.IsValid())
 	{
@@ -1477,11 +1490,11 @@ void FGridlyLocalizationServiceProvider::ProcessSourceChangesForNamespaces(const
 
 	ULocalizationTarget* LocalizationTarget = CurrentSourceDownloadTarget.Get();
 	const FString TargetName = LocalizationTarget->Settings.Name;
-	
+
 	// Create temporary directory for CSV files
 	const FString TempDir = FPaths::ProjectSavedDir() / TEXT("Temp") / TEXT("GridlySourceChanges") / TargetName;
 	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-	
+
 	if (!PlatformFile.DirectoryExists(*TempDir))
 	{
 		PlatformFile.CreateDirectoryTree(*TempDir);
@@ -1490,6 +1503,8 @@ void FGridlyLocalizationServiceProvider::ProcessSourceChangesForNamespaces(const
 	int32 ProcessedNamespaces = 0;
 	int32 SucceededNamespaces = 0;
 	TArray<FString> FailedNamespaces;
+	// Namespaces that imported cleanly — only these are eligible for the deletion pass.
+	TSet<FString> SucceededNamespaceNames;
 	const int32 TotalNamespaces = NamespaceRecords.Num();
 
 	for (const auto& NamespacePair : NamespaceRecords)
@@ -1526,6 +1541,7 @@ void FGridlyLocalizationServiceProvider::ProcessSourceChangesForNamespaces(const
 		if (ImportCSVToStringTable(LocalizationTarget, Namespace, CSVFilePath))
 		{
 			++SucceededNamespaces;
+			SucceededNamespaceNames.Add(Namespace);
 		}
 		else
 		{
@@ -1534,6 +1550,25 @@ void FGridlyLocalizationServiceProvider::ProcessSourceChangesForNamespaces(const
 	}
 
 	const bool bAllSucceeded = FailedNamespaces.Num() == 0;
+
+	// Deletion pass. Runs only when the paginated download itself completed fully — a partial
+	// dataset would falsely mark still-live Gridly entries as "missing". Individual per-namespace
+	// import failures don't block the whole pass; the helper skips their namespaces internally.
+	int32 DeletedEntries = 0;
+	int32 AffectedTables = 0;
+	FString BackupDir;
+	const UGridlyGameSettings* GameSettings = GetMutableDefault<UGridlyGameSettings>();
+	const bool bDeletionRequested = GameSettings && GameSettings->bDeleteMissingRecordsOnDownload;
+	const bool bDeletionRan = bDeletionRequested && bDownloadCompletedFully;
+	if (bDeletionRequested && !bDownloadCompletedFully)
+	{
+		UE_LOG(LogGridlyLocalizationServiceProvider, Warning,
+			TEXT("⚠️ bDeleteMissingRecordsOnDownload is enabled but the download did not complete fully — skipping deletion to avoid data loss."));
+	}
+	else if (bDeletionRan)
+	{
+		DeleteMissingRecordsFromStringTables(NamespaceRecords, SucceededNamespaceNames, DeletedEntries, AffectedTables, BackupDir);
+	}
 
 	FString Message;
 	if (bAllSucceeded)
@@ -1547,6 +1582,22 @@ void FGridlyLocalizationServiceProvider::ProcessSourceChangesForNamespaces(const
 		Message = FString::Printf(
 			TEXT("⚠️ Source changes processing finished with errors.\n\n📊 Imported %d / %d namespaces.\n❌ Failed (%d): %s\n\n📁 CSV files: %s\n\nCheck the Output Log for details (search for ❌). Common causes:\n• StringTableSavePath must start with a valid mount root (e.g. '/Game/Localization/StringTables', not 'Content/...').\n• Namespace contains characters invalid in an asset name."),
 			SucceededNamespaces, TotalNamespaces, FailedNamespaces.Num(), *FString::Join(FailedNamespaces, TEXT(", ")), *TempDir);
+	}
+
+	if (bDeletionRan)
+	{
+		Message += FString::Printf(
+			TEXT("\n\n🗑️ Removed %d stale entries across %d string table(s) (entries no longer present in Gridly)."),
+			DeletedEntries, AffectedTables);
+
+		if (!BackupDir.IsEmpty())
+		{
+			Message += FString::Printf(TEXT("\n💾 Backup of affected string tables: %s"), *BackupDir);
+		}
+		else
+		{
+			Message += TEXT("\n⚠️ No backup written — StringTableBackupPath was empty.");
+		}
 	}
 
 	UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("%s"), *Message);
@@ -2009,7 +2060,229 @@ UStringTable* FGridlyLocalizationServiceProvider::FindOrCreateStringTable(const 
 	return StringTable;
 }
 
+void FGridlyLocalizationServiceProvider::DeleteMissingRecordsFromStringTables(
+	const TMap<FString, TArray<FGridlySourceRecord>>& NamespaceRecords,
+	const TSet<FString>& SucceededNamespaces,
+	int32& OutDeletedEntries,
+	int32& OutAffectedTables,
+	FString& OutBackupDir)
+{
+	OutDeletedEntries = 0;
+	OutAffectedTables = 0;
+	OutBackupDir.Empty();
 
+	const UGridlyGameSettings* GameSettings = GetMutableDefault<UGridlyGameSettings>();
+	if (!GameSettings)
+	{
+		return;
+	}
+
+	// Prepare a per-run backup subfolder up front. If BackupPath is empty we still run the
+	// deletion, but log a prominent warning — the user opted out of the safety net.
+	FString BackupRootDir;
+	FString ConfiguredBackupPath = GameSettings->StringTableBackupPath.TrimStartAndEnd();
+	if (!ConfiguredBackupPath.IsEmpty())
+	{
+		// Normalize separators and resolve UE mount-point paths (e.g. "/Game/Backup" →
+		// "<Project>/Content/Backup"). Users configuring the sibling StringTableSavePath field
+		// use the /Game/... convention, so we accept the same form here. Anything that doesn't
+		// resolve to a mount point is treated as a plain filesystem path.
+		ConfiguredBackupPath.ReplaceInline(TEXT("\\"), TEXT("/"));
+
+		FString ResolvedRoot = ConfiguredBackupPath;
+		if (ConfiguredBackupPath.StartsWith(TEXT("/")))
+		{
+			FString AsFilename;
+			if (FPackageName::TryConvertLongPackageNameToFilename(ConfiguredBackupPath / TEXT(""), AsFilename))
+			{
+				ResolvedRoot = AsFilename;
+
+				// Warn if the resolved location lives inside the project's Content directory:
+				// the AssetRegistry will happily pick up copied .uasset files there and treat
+				// them as duplicate assets, which is almost never what the user wants.
+				const FString ContentDirAbs = FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir());
+				const FString ResolvedAbs = FPaths::ConvertRelativePathToFull(ResolvedRoot);
+				if (ResolvedAbs.StartsWith(ContentDirAbs))
+				{
+					UE_LOG(LogGridlyLocalizationServiceProvider, Warning,
+						TEXT("⚠️ StringTableBackupPath '%s' resolves inside the project Content directory (%s). This can confuse the AssetRegistry — consider picking a path outside /Content."),
+						*ConfiguredBackupPath, *ResolvedAbs);
+				}
+			}
+		}
+
+		const FString Timestamp = FDateTime::Now().ToString(TEXT("%Y-%m-%d_%H%M%S"));
+		BackupRootDir = FPaths::Combine(ResolvedRoot, FString::Printf(TEXT("GridlyDownloadBackup_%s"), *Timestamp));
+		IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+		if (!PlatformFile.DirectoryExists(*BackupRootDir))
+		{
+			if (!PlatformFile.CreateDirectoryTree(*BackupRootDir))
+			{
+				UE_LOG(LogGridlyLocalizationServiceProvider, Error,
+					TEXT("❌ Failed to create backup directory '%s'. Aborting deletion pass to avoid unrecoverable changes."), *BackupRootDir);
+				return;
+			}
+		}
+		OutBackupDir = FPaths::ConvertRelativePathToFull(BackupRootDir);
+		UE_LOG(LogGridlyLocalizationServiceProvider, Display, TEXT("🗂️ Backing up string tables to: %s"), *OutBackupDir);
+	}
+	else
+	{
+		UE_LOG(LogGridlyLocalizationServiceProvider, Warning,
+			TEXT("⚠️ StringTableBackupPath is empty — proceeding without backup. Set it in Project Settings → Plugins → Gridly for safety."));
+	}
+
+	// Build namespace -> expected keys map (only for succeeded namespaces).
+	TMap<FString, TSet<FString>> ExpectedKeysByNamespace;
+	for (const auto& NamespacePair : NamespaceRecords)
+	{
+		if (!SucceededNamespaces.Contains(NamespacePair.Key))
+		{
+			continue;
+		}
+		TSet<FString>& KeySet = ExpectedKeysByNamespace.FindOrAdd(NamespacePair.Key);
+		for (const FGridlySourceRecord& Record : NamespacePair.Value)
+		{
+			if (!Record.RecordId.IsEmpty())
+			{
+				KeySet.Add(Record.RecordId);
+			}
+		}
+	}
+
+	if (ExpectedKeysByNamespace.Num() == 0)
+	{
+		UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("ℹ️ Deletion pass: no eligible namespaces to prune."));
+		return;
+	}
+
+	for (const auto& ExpectedPair : ExpectedKeysByNamespace)
+	{
+		const FString& Namespace = ExpectedPair.Key;
+		const TSet<FString>& ExpectedKeys = ExpectedPair.Value;
+
+		// Find the existing UStringTable. The import pass already created any table we needed,
+		// so calling FindOrCreateStringTable here effectively finds the existing asset.
+		UStringTable* StringTable = FindOrCreateStringTable(Namespace);
+		if (!StringTable)
+		{
+			// bOnlyDeleteEntriesWhenStringTableExists=true: skip silently — never create a table
+			// just to prune it. When false, we still can't prune "nothing", so also skip.
+			UE_LOG(LogGridlyLocalizationServiceProvider, Verbose,
+				TEXT("Deletion pass: no string table found for namespace '%s' — skipping."), *Namespace);
+			continue;
+		}
+
+		FStringTable& MutableStringTable = StringTable->GetMutableStringTable().Get();
+
+		// Collect current keys first so we can mutate while iterating safely.
+		TArray<FString> ExistingKeys;
+		MutableStringTable.EnumerateSourceStrings([&ExistingKeys](const FString& InKey, const FString& /*InSource*/) -> bool
+		{
+			ExistingKeys.Add(InKey);
+			return true; // continue enumeration
+		});
+
+		TArray<FString> KeysToRemove;
+		for (const FString& Key : ExistingKeys)
+		{
+			if (!ExpectedKeys.Contains(Key))
+			{
+				KeysToRemove.Add(Key);
+			}
+		}
+
+		if (KeysToRemove.Num() == 0)
+		{
+			continue;
+		}
+
+		// Back up before modifying. If backup was configured but fails, bail on this table.
+		if (!BackupRootDir.IsEmpty() && !BackupStringTablePackage(StringTable, BackupRootDir))
+		{
+			UE_LOG(LogGridlyLocalizationServiceProvider, Error,
+				TEXT("❌ Backup failed for '%s' — leaving %d stale entries untouched."),
+				*StringTable->GetPathName(), KeysToRemove.Num());
+			continue;
+		}
+
+		StringTable->Modify(true);
+		for (const FString& Key : KeysToRemove)
+		{
+			MutableStringTable.RemoveSourceString(FTextKey(Key));
+			UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("🗑️ Removed stale entry '%s' from namespace '%s'"), *Key, *Namespace);
+			++OutDeletedEntries;
+		}
+		StringTable->MarkPackageDirty();
+		++OutAffectedTables;
+
+		UE_LOG(LogGridlyLocalizationServiceProvider, Display,
+			TEXT("🗑️ Pruned %d entries from '%s' (namespace '%s')"),
+			KeysToRemove.Num(), *StringTable->GetPathName(), *Namespace);
+	}
+}
+
+bool FGridlyLocalizationServiceProvider::BackupStringTablePackage(const UStringTable* StringTable, const FString& BackupRootDir) const
+{
+	if (!StringTable)
+	{
+		return false;
+	}
+
+	const UPackage* Package = StringTable->GetOutermost();
+	if (!Package)
+	{
+		return false;
+	}
+
+	const FString LongPackageName = Package->GetName();
+
+	// Resolve the on-disk .uasset path. Freshly created (unsaved) packages have no file yet —
+	// there is nothing to lose, so treat that as success.
+	FString SourceFilePath;
+	if (!FPackageName::TryConvertLongPackageNameToFilename(LongPackageName, SourceFilePath, FPackageName::GetAssetPackageExtension()))
+	{
+		UE_LOG(LogGridlyLocalizationServiceProvider, Warning,
+			TEXT("Backup: could not resolve on-disk path for package '%s'."), *LongPackageName);
+		return false;
+	}
+
+	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	if (!PlatformFile.FileExists(*SourceFilePath))
+	{
+		UE_LOG(LogGridlyLocalizationServiceProvider, Log,
+			TEXT("Backup: no existing .uasset for '%s' (never saved) — nothing to back up."), *LongPackageName);
+		return true;
+	}
+
+	// Mirror the package path under BackupRootDir so multiple tables don't collide.
+	// Example: /Game/Localization/StringTables/UI -> <BackupRoot>/Game/Localization/StringTables/UI.uasset
+	FString RelativePackagePath = LongPackageName;
+	if (RelativePackagePath.StartsWith(TEXT("/")))
+	{
+		RelativePackagePath.RightChopInline(1);
+	}
+	const FString DestFilePath = FPaths::Combine(BackupRootDir, RelativePackagePath) + FPackageName::GetAssetPackageExtension();
+
+	const FString DestDir = FPaths::GetPath(DestFilePath);
+	if (!DestDir.IsEmpty() && !PlatformFile.DirectoryExists(*DestDir))
+	{
+		if (!PlatformFile.CreateDirectoryTree(*DestDir))
+		{
+			UE_LOG(LogGridlyLocalizationServiceProvider, Error, TEXT("❌ Backup: failed to create dir '%s'."), *DestDir);
+			return false;
+		}
+	}
+
+	if (!PlatformFile.CopyFile(*DestFilePath, *SourceFilePath))
+	{
+		UE_LOG(LogGridlyLocalizationServiceProvider, Error, TEXT("❌ Backup: copy failed: '%s' -> '%s'"), *SourceFilePath, *DestFilePath);
+		return false;
+	}
+
+	UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("💾 Backed up '%s' -> '%s'"), *SourceFilePath, *DestFilePath);
+	return true;
+}
 
 
 

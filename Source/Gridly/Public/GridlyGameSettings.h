@@ -168,6 +168,32 @@ public:
     UPROPERTY(Category = "Gridly|Options", BlueprintReadOnly, EditAnywhere, Config, meta = (ContentDir))
     FString StringTableSavePath = "/Game/Localization/StringTables";
 
+    /**
+     * When enabled, records that exist in UE string tables but no longer exist in Gridly will be
+     * removed during Download Source Changes. Deletion runs only when the full paginated download
+     * completed successfully; a failed or partial download skips the deletion pass entirely.
+     */
+    UPROPERTY(Category = "Gridly|Options", BlueprintReadOnly, EditAnywhere, Config)
+    bool bDeleteMissingRecordsOnDownload = false;
+
+    /**
+     * Absolute directory path (outside the /Content tree) where affected UStringTable .uasset files
+     * are copied before any entries are removed. A timestamped subfolder is created per run. Leave
+     * empty to skip backups (not recommended).
+     */
+    UPROPERTY(Category = "Gridly|Options", BlueprintReadOnly, EditAnywhere, Config,
+        meta = (EditCondition = "bDeleteMissingRecordsOnDownload"))
+    FString StringTableBackupPath;
+
+    /**
+     * When enabled, only individual records inside existing string tables are removed. A
+     * UStringTable asset itself is never deleted, even if Gridly no longer has any records for it.
+     * This is the safe default; disable only if you want empty tables removed as assets too.
+     */
+    UPROPERTY(Category = "Gridly|Options", BlueprintReadOnly, EditAnywhere, Config,
+        meta = (EditCondition = "bDeleteMissingRecordsOnDownload"))
+    bool bOnlyDeleteEntriesWhenStringTableExists = true;
+
     /** This will remap metadata to specific Gridly columns during the export */
     UPROPERTY(Category = "Gridly|Options", BlueprintReadOnly, EditAnywhere, Config, meta = (EditCondition = "bExportMetadata"))
     TMap<FString, FGridlyColumnInfo> MetadataMapping;
