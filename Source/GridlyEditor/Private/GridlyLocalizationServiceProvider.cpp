@@ -1592,7 +1592,16 @@ void FGridlyLocalizationServiceProvider::ProcessSourceChangesForNamespaces(const
 
 		if (!BackupDir.IsEmpty())
 		{
-			Message += FString::Printf(TEXT("\n💾 Backup of affected string tables: %s"), *BackupDir);
+			// Only surface the backup path if the folder actually exists on disk — it is created
+			// lazily on the first successful copy, so a run with nothing to prune leaves no folder.
+			if (PlatformFile.DirectoryExists(*BackupDir))
+			{
+				Message += FString::Printf(TEXT("\n💾 Backup of affected string tables: %s"), *BackupDir);
+			}
+			else
+			{
+				Message += TEXT("\n💾 No backup written this run (no entries needed pruning).");
+			}
 		}
 		else
 		{
@@ -1980,6 +1989,9 @@ UStringTable* FGridlyLocalizationServiceProvider::FindOrCreateStringTable(const 
 			UE_LOG(LogGridlyLocalizationServiceProvider, Display,
 				TEXT("📋 Found existing string table: %s for namespace: %s"),
 				*StringTable->GetPathName(), *Namespace);
+			// Clear read-only up front — SavePackage crashes if the .uasset is read-only
+			// (common when the file was copied from source control without a checkout).
+			EnsureStringTablePackageWritable(StringTable);
 			return StringTable;
 		}
 	}
@@ -2077,8 +2089,9 @@ void FGridlyLocalizationServiceProvider::DeleteMissingRecordsFromStringTables(
 		return;
 	}
 
-	// Prepare a per-run backup subfolder up front. If BackupPath is empty we still run the
-	// deletion, but log a prominent warning — the user opted out of the safety net.
+	// Resolve the configured backup path and prepare a per-run subfolder path. The subfolder is
+	// created lazily by the first successful BackupStringTablePackage call — that way runs where
+	// no entries need pruning don't leave an empty timestamped folder behind.
 	FString BackupRootDir;
 	FString ConfiguredBackupPath = GameSettings->StringTableBackupPath.TrimStartAndEnd();
 	if (!ConfiguredBackupPath.IsEmpty())
@@ -2111,20 +2124,16 @@ void FGridlyLocalizationServiceProvider::DeleteMissingRecordsFromStringTables(
 			}
 		}
 
+		// Purge any prior GridlyDownloadBackup_* subfolders so only the latest run's backup is
+		// kept. Do this before choosing the new subfolder name to avoid a race with the timestamp.
+		PurgePreviousBackupFolders(ResolvedRoot);
+
 		const FString Timestamp = FDateTime::Now().ToString(TEXT("%Y-%m-%d_%H%M%S"));
 		BackupRootDir = FPaths::Combine(ResolvedRoot, FString::Printf(TEXT("GridlyDownloadBackup_%s"), *Timestamp));
-		IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-		if (!PlatformFile.DirectoryExists(*BackupRootDir))
-		{
-			if (!PlatformFile.CreateDirectoryTree(*BackupRootDir))
-			{
-				UE_LOG(LogGridlyLocalizationServiceProvider, Error,
-					TEXT("❌ Failed to create backup directory '%s'. Aborting deletion pass to avoid unrecoverable changes."), *BackupRootDir);
-				return;
-			}
-		}
+		// Intentionally do NOT create BackupRootDir here — BackupStringTablePackage's
+		// CreateDirectoryTree on the destination file's parent will build it lazily on first use.
 		OutBackupDir = FPaths::ConvertRelativePathToFull(BackupRootDir);
-		UE_LOG(LogGridlyLocalizationServiceProvider, Display, TEXT("🗂️ Backing up string tables to: %s"), *OutBackupDir);
+		UE_LOG(LogGridlyLocalizationServiceProvider, Display, TEXT("🗂️ Backup directory (created on first write): %s"), *OutBackupDir);
 	}
 	else
 	{
@@ -2282,6 +2291,100 @@ bool FGridlyLocalizationServiceProvider::BackupStringTablePackage(const UStringT
 
 	UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("💾 Backed up '%s' -> '%s'"), *SourceFilePath, *DestFilePath);
 	return true;
+}
+
+void FGridlyLocalizationServiceProvider::PurgePreviousBackupFolders(const FString& ParentDir) const
+{
+	if (ParentDir.IsEmpty())
+	{
+		return;
+	}
+
+	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	if (!PlatformFile.DirectoryExists(*ParentDir))
+	{
+		// Nothing to purge — first-ever run or the directory hasn't been created yet.
+		return;
+	}
+
+	// Collect matches first, then delete outside the enumerator (deleting during iteration is
+	// undefined behaviour for IterateDirectory).
+	TArray<FString> ToRemove;
+	PlatformFile.IterateDirectory(*ParentDir,
+		[&ToRemove](const TCHAR* FilenameOrDirectory, bool bIsDirectory) -> bool
+		{
+			if (bIsDirectory)
+			{
+				const FString LeafName = FPaths::GetCleanFilename(FString(FilenameOrDirectory));
+				if (LeafName.StartsWith(TEXT("GridlyDownloadBackup_")))
+				{
+					ToRemove.Add(FString(FilenameOrDirectory));
+				}
+			}
+			return true; // continue
+		});
+
+	for (const FString& OldBackupDir : ToRemove)
+	{
+		if (PlatformFile.DeleteDirectoryRecursively(*OldBackupDir))
+		{
+			UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("🧹 Purged previous backup folder: %s"), *OldBackupDir);
+		}
+		else
+		{
+			UE_LOG(LogGridlyLocalizationServiceProvider, Warning,
+				TEXT("⚠️ Could not remove previous backup folder '%s'. It may be in use by another process."), *OldBackupDir);
+		}
+	}
+}
+
+void FGridlyLocalizationServiceProvider::EnsureStringTablePackageWritable(const UStringTable* StringTable) const
+{
+	if (!StringTable)
+	{
+		return;
+	}
+
+	const UPackage* Package = StringTable->GetOutermost();
+	if (!Package)
+	{
+		return;
+	}
+
+	const FString LongPackageName = Package->GetName();
+	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+
+	// Cover both the .uasset and its sibling .uexp — either being read-only is enough to make
+	// SavePackage abort. Freshly created packages have no file yet; that's fine, nothing to clear.
+	const TArray<FString, TInlineAllocator<2>> Extensions = {
+		FPackageName::GetAssetPackageExtension(),
+		TEXT(".uexp")
+	};
+
+	for (const FString& Ext : Extensions)
+	{
+		FString FilePath;
+		if (!FPackageName::TryConvertLongPackageNameToFilename(LongPackageName, FilePath, Ext))
+		{
+			continue;
+		}
+
+		if (!PlatformFile.FileExists(*FilePath) || !PlatformFile.IsReadOnly(*FilePath))
+		{
+			continue;
+		}
+
+		if (PlatformFile.SetReadOnly(*FilePath, false))
+		{
+			UE_LOG(LogGridlyLocalizationServiceProvider, Display,
+				TEXT("🔓 Cleared read-only flag on '%s' so it can be modified/saved."), *FilePath);
+		}
+		else
+		{
+			UE_LOG(LogGridlyLocalizationServiceProvider, Warning,
+				TEXT("⚠️ Failed to clear read-only flag on '%s'. Save may still fail."), *FilePath);
+		}
+	}
 }
 
 

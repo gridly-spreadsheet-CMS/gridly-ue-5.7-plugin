@@ -173,6 +173,15 @@ public:
 	// package sub-path. Returns true if a file was copied (or the source didn't exist yet).
 	bool BackupStringTablePackage(const UStringTable* StringTable, const FString& BackupRootDir) const;
 
+	// Removes any pre-existing GridlyDownloadBackup_* subfolders directly inside ParentDir so
+	// the backup directory doesn't accumulate empty folders across runs.
+	void PurgePreviousBackupFolders(const FString& ParentDir) const;
+
+	// Clears the read-only attribute on the on-disk .uasset backing the given string table so
+	// that subsequent modifications and saves don't crash SavePackage. No-op if the package has
+	// no file yet (freshly created) or is already writable.
+	void EnsureStringTablePackageWritable(const UStringTable* StringTable) const;
+
 	// String table helper functions
 	UStringTable* FindOrCreateStringTable(const FString& Namespace);
 	
