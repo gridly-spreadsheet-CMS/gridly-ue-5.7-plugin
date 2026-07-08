@@ -1447,13 +1447,27 @@ void FGridlyLocalizationServiceProvider::OnDownloadSourceChangesFromGridly(FHttp
 	//   - the server still says there are more records to fetch, AND
 	//   - this page actually returned something (guard against an infinite loop if the API
 	//     returns an empty page before we hit the reported total).
-	const bool bMoreByCount = SourceDownloadTotalCount > 0 && NextOffset < SourceDownloadTotalCount;
+	// Fallback when X-Total-Count is absent or zero: keep paging as long as the server keeps
+	// returning full pages. Without this, a missing header would silently end the download
+	// after the first page and drop every record past SourceDownloadLimit.
+	const bool bHaveReliableTotal = SourceDownloadTotalCount > 0;
+	const bool bMoreByCount = bHaveReliableTotal
+		? NextOffset < SourceDownloadTotalCount
+		: PageRecordCount >= SourceDownloadLimit;
 	const bool bHasProgress = PageRecordCount > 0;
 
 	if (bMoreByCount && bHasProgress)
 	{
-		UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("📄 Fetched %d records (%d/%d). Requesting next page."),
-			PageRecordCount, NextOffset, SourceDownloadTotalCount);
+		if (bHaveReliableTotal)
+		{
+			UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("📄 Fetched %d records (%d/%d). Requesting next page."),
+				PageRecordCount, NextOffset, SourceDownloadTotalCount);
+		}
+		else
+		{
+			UE_LOG(LogGridlyLocalizationServiceProvider, Log, TEXT("📄 Fetched %d records (%d so far, no X-Total-Count). Requesting next page."),
+				PageRecordCount, NextOffset);
+		}
 		RequestSourceChangesPage(NextOffset);
 		return;
 	}
@@ -1977,14 +1991,88 @@ UStringTable* FGridlyLocalizationServiceProvider::FindOrCreateStringTable(const 
 	// We also compare against AssetData.AssetName so we don't force-load every string
 	// table in the project just to read its name.
 	const FName NamespaceFName(*Namespace);
+
+	// Resolve the configured save path once so we can prefer candidates that live under it.
+	// A namespace can legitimately have duplicates across the project — e.g. a leftover copy
+	// inside a GridlyDownloadBackup_* subfolder from a previous run whose backup path was
+	// pointed inside /Content. Without this preference the AssetRegistry's iteration order
+	// determines the winner, which caused source strings to land in the backup asset and
+	// leave the real string table untouched.
+	FString PreferredSavePath;
+	if (const UGridlyGameSettings* GameSettings = GetMutableDefault<UGridlyGameSettings>())
+	{
+		PreferredSavePath = GameSettings->StringTableSavePath;
+	}
+	if (PreferredSavePath.IsEmpty())
+	{
+		PreferredSavePath = TEXT("/Game/Localization/StringTables");
+	}
+	PreferredSavePath.ReplaceInline(TEXT("\\"), TEXT("/"));
+	while (PreferredSavePath.Len() > 1 && PreferredSavePath.EndsWith(TEXT("/")))
+	{
+		PreferredSavePath.LeftChopInline(1);
+	}
+
+	TArray<FAssetData> Candidates;
 	for (const FAssetData& AssetData : AssetList)
 	{
-		if (AssetData.AssetName != NamespaceFName)
+		if (AssetData.AssetName == NamespaceFName)
+		{
+			Candidates.Add(AssetData);
+		}
+	}
+
+	// Skip anything that lives inside a GridlyDownloadBackup_* folder — those are our own
+	// safety snapshots and must never be treated as the authoritative asset for a namespace.
+	auto IsBackupPath = [](const FAssetData& AssetData) -> bool
+	{
+		const FString PackagePath = AssetData.PackagePath.ToString();
+		return PackagePath.Contains(TEXT("/GridlyDownloadBackup_"));
+	};
+
+	FAssetData Selected;
+	bool bHasSelection = false;
+
+	// Prefer a candidate under the configured save path, ignoring backup folders.
+	for (const FAssetData& AssetData : Candidates)
+	{
+		if (IsBackupPath(AssetData))
 		{
 			continue;
 		}
+		const FString PackagePath = AssetData.PackagePath.ToString();
+		if (PackagePath.Equals(PreferredSavePath) || PackagePath.StartsWith(PreferredSavePath + TEXT("/")))
+		{
+			Selected = AssetData;
+			bHasSelection = true;
+			break;
+		}
+	}
 
-		if (UStringTable* StringTable = Cast<UStringTable>(AssetData.GetAsset()))
+	// Fall back to any non-backup candidate.
+	if (!bHasSelection)
+	{
+		for (const FAssetData& AssetData : Candidates)
+		{
+			if (!IsBackupPath(AssetData))
+			{
+				Selected = AssetData;
+				bHasSelection = true;
+				break;
+			}
+		}
+	}
+
+	if (bHasSelection)
+	{
+		if (Candidates.Num() > 1)
+		{
+			UE_LOG(LogGridlyLocalizationServiceProvider, Warning,
+				TEXT("⚠️ Multiple string tables named '%s' exist in the project (%d found). Using '%s'. Backup-folder copies were skipped."),
+				*Namespace, Candidates.Num(), *Selected.PackageName.ToString());
+		}
+
+		if (UStringTable* StringTable = Cast<UStringTable>(Selected.GetAsset()))
 		{
 			UE_LOG(LogGridlyLocalizationServiceProvider, Display,
 				TEXT("📋 Found existing string table: %s for namespace: %s"),
@@ -1994,6 +2082,14 @@ UStringTable* FGridlyLocalizationServiceProvider::FindOrCreateStringTable(const 
 			EnsureStringTablePackageWritable(StringTable);
 			return StringTable;
 		}
+	}
+	else if (Candidates.Num() > 0)
+	{
+		// Every candidate lived in a backup folder — log why we're creating a new asset
+		// instead of returning one of them, so the user can clean up the stale backups.
+		UE_LOG(LogGridlyLocalizationServiceProvider, Warning,
+			TEXT("⚠️ Only backup-folder copies of string table '%s' exist (%d found). Creating a new asset under the configured save path instead."),
+			*Namespace, Candidates.Num());
 	}
 	
 	// Create a new string table asset for this namespace
