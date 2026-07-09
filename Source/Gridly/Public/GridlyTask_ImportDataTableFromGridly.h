@@ -64,5 +64,5 @@ private:
 	TArray<FGridlyTableRow> GridlyTableRows;
 
 	UPROPERTY()
-	UGridlyDataTable* GridlyDataTable;
+	TObjectPtr<UGridlyDataTable> GridlyDataTable;
 };
